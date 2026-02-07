@@ -1,4 +1,5 @@
-import { generateHelpers } from "skybridge/web";
+import { generateHelpers, useSendFollowUpMessage } from "skybridge/web";
 import type { AppType } from "../../server/src/server";
 
-export const { useToolInfo } = generateHelpers<AppType>();
+export const { useToolInfo, useCallTool } = generateHelpers<AppType>();
+export { useSendFollowUpMessage };

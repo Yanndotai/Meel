@@ -1,0 +1,12 @@
+{
+  "current_user": {
+    "diet": "none"
+  },
+  "unknown_user": {
+    "diet": "vegetarian",
+    "household_size": "1",
+    "budget": "high",
+    "allergies": "nuts",
+    "cuisine_preferences": "italian"
+  }
+}

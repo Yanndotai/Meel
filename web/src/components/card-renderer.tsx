@@ -1,0 +1,32 @@
+import { QuestionCard } from "./question-card";
+import { InfoCard } from "./info-card";
+
+interface QuestionCardConfig {
+  type: "question";
+  question: string;
+  select_type: "single" | "multi";
+  options: { label: string; value: string; icon?: string; description?: string }[];
+}
+
+interface InfoCardConfig {
+  type: "info";
+  title: string;
+  items: { label: string; value: string }[];
+}
+
+export type CardConfig = QuestionCardConfig | InfoCardConfig;
+
+export function CardRenderer({ card }: { card: CardConfig }) {
+  switch (card.type) {
+    case "question":
+      return (
+        <QuestionCard
+          question={card.question}
+          select_type={card.select_type}
+          options={card.options}
+        />
+      );
+    case "info":
+      return <InfoCard title={card.title} items={card.items} />;
+  }
+}
