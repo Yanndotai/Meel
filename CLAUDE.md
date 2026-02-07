@@ -219,6 +219,7 @@ pnpm dev
 1. Run `ngrok http 3000` to expose server
 2. In ChatGPT: Settings → Connectors → Create
 3. Add ngrok URL + `/mcp` (e.g., `https://abc123.ngrok-free.app/mcp`)
+4. Fill-cart progress is polled by the widget via a private MCP tool (`check_fill_cart_progress`) over the same MCP connection, so no separate API origin is required for live updates.
 
 ### Add a New Widget
 
@@ -434,6 +435,33 @@ pnpm start  # Runs production server
 - Browser automation may fail if the website structure changes
 - Review the task description for clarity
 - Note: Browser Use tasks may take 30-60 seconds to complete
+
+### Debugging fill-cart progress (widget polling)
+
+To verify that the long-running fill-cart flow works (widget gets jobId → widget polls via private MCP tool → server long-polls → UI updates):
+
+1. **Terminal (quick check)**  
+   With `pnpm dev` running and ChatGPT connected (e.g. via ngrok):
+   - Click **"Looks perfect"** in the meal plan widget.
+   - You should see in the **server terminal**:
+     - `[fill-cart] invoked { jobId: '...', productsCount: N }` — fill-cart was called and a job was created.
+   - After ~2s you should see:
+     - `[check_fill_cart_progress] invoked { jobId: '...', progressFound: true, status: 'started'|'running'|... }` — the widget’s progress tool call reached the server.
+   - **If you see fill-cart but never check_fill_cart_progress:** the widget is not calling the private tool (or the host is not forwarding it). Check connector and widget code.
+   - **If you see both:** the pipeline is working; the server long-polls for up to 50s and returns when the job completes or times out.
+
+2. **Structured logs (debug ingest)**  
+   Instrumentation sends NDJSON to the debug ingest; logs are written to `.cursor/debug.log`. Useful entries:
+   - `server.ts:fill-cart:entry` — fill-cart ran (H1: widget got jobId).
+   - `server.ts:check_fill_cart_progress:entry` — progress tool ran (H2: host forwards widget tool calls).
+   - `show-plan.tsx:poll-effect:run` — polling effect started (H3: jobId set, effect ran).
+   - `show-plan.tsx:poll:call` — widget called progress tool (H2/H3).
+   - `show-plan.tsx:poll:result` — widget got a result (H4/H5: shape and status).
+   - `show-plan.tsx:poll:catch` — progress tool call threw (H2).
+   Widget-side logs only appear in `debug.log` if the client can reach the ingest server (e.g. same machine, ingest running).
+
+3. **UI**  
+   After "Looks perfect": within ~2s the card should show "Checking cart progress…" (if the host shows tool invocation messages). When the job finishes (or after long-poll timeout), the widget should show added/failed products and "Buy now" or error.
 
 ## Resources
 

@@ -183,39 +183,55 @@ export interface FillCartResult {
 export function FillCartProgress({
   status,
   products,
-  simulatedCompleted,
+  progress,
   result,
+  errorMessage,
+  onTryAgain,
 }: {
-  status: "shopping" | "done";
+  status: "shopping" | "done" | "error";
   products: FillCartProduct[];
-  simulatedCompleted: number;
+  progress?: { added_products: FillCartProduct[]; failed_products: FillCartProduct[] };
   result?: FillCartResult | null;
+  errorMessage?: string | null;
+  onTryAgain?: () => void;
 }) {
+  const addedSource = status === "done" ? result : progress;
+  const failedSource = status === "done" ? result : progress;
   const addedSet = new Set(
-    (result?.added_products ?? []).map((p) => `${p.name}:${p.quantity}`),
+    (addedSource?.added_products ?? []).map((p) => `${p.name}:${p.quantity}`),
   );
   const failedSet = new Set(
-    (result?.failed_products ?? []).map((p) => `${p.name}:${p.quantity}`),
+    (failedSource?.failed_products ?? []).map((p) => `${p.name}:${p.quantity}`),
   );
-  const cartUrl = result?.cart_url || "#";
+
+  const headingText =
+    status === "shopping"
+      ? "Started shopping for items:"
+      : status === "done"
+        ? "Shopping complete"
+        : "Shopping";
 
   return (
     <Card className="card-action fill-cart-progress">
       <p className="action-text">
-        {status === "shopping"
-          ? "Started shopping for items:"
-          : "Shopping complete"}
+        {headingText}
+        {status === "shopping" && (
+          <span className="fill-cart-loading" aria-hidden>
+            <span className="fill-cart-loading-dot" />
+            <span className="fill-cart-loading-dot" />
+            <span className="fill-cart-loading-dot" />
+          </span>
+        )}
       </p>
+      {errorMessage && (
+        <p className="fill-cart-error-message">{errorMessage}</p>
+      )}
       <ul className="fill-cart-list">
-        {products.map((product, index) => {
+        {products.map((product) => {
           const key = `${product.name}:${product.quantity}`;
-          const isSimulatedDone = status === "shopping" && index < simulatedCompleted;
           const isAdded = addedSet.has(key);
           const isFailed = failedSet.has(key);
-          const crossed =
-            status === "done"
-              ? result ? isAdded : true
-              : isSimulatedDone;
+          const crossed = isAdded || isFailed;
           return (
             <li
               key={key}
@@ -226,15 +242,24 @@ export function FillCartProgress({
           );
         })}
       </ul>
-      {status === "done" && (
+      {status === "done" && result?.cart_url && (
         <a
-          href={cartUrl}
+          href={result.cart_url}
           target="_blank"
           rel="noopener noreferrer"
           className="btn btn-primary fill-cart-buy-btn"
         >
           Buy now
         </a>
+      )}
+      {status === "error" && onTryAgain && (
+        <button
+          type="button"
+          className="btn btn-primary fill-cart-try-again-btn"
+          onClick={onTryAgain}
+        >
+          Try again
+        </button>
       )}
     </Card>
   );

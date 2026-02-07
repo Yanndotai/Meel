@@ -5,11 +5,27 @@ import express, { type Express } from "express";
 import { widgetsDevServer } from "skybridge/server";
 import type { ViteDevServer } from "vite";
 import { mcp } from "./middleware.js";
-import server from "./server.js";
+import server, { getFillCartProgress } from "./server.js";
 
 const app = express() as Express & { vite: ViteDevServer };
 
 app.use(express.json());
+
+app.get("/api/fill-cart/progress/:jobId", (req, res) => {
+  const progress = getFillCartProgress(req.params.jobId);
+  if (!progress) {
+    res.status(404).json({ error: "Job not found or expired" });
+    return;
+  }
+  res.json({
+    status: progress.status,
+    added_products: progress.added_products,
+    failed_products: progress.failed_products,
+    cart_url: progress.cart_url,
+    error: progress.error,
+    current_product: progress.current_product,
+  });
+});
 
 app.use(mcp(server));
 

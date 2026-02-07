@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 import { McpServer } from "skybridge/server";
 import { z } from "zod";
 import { BrowserUse, BrowserUseClient } from "browser-use-sdk";
@@ -8,6 +9,43 @@ const BROWSER_USE_API_KEY = process.env.BROWSER_USE_API_KEY!;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+// --- Fill-cart progress store (in-memory, TTL 1 hour) ---
+const FILL_CART_PROGRESS_TTL_MS = 60 * 60 * 1000;
+
+export type FillCartProgressProduct = { name: string; quantity: string };
+
+export type FillCartProgressState = {
+  status: "started" | "running" | "completed" | "failed";
+  added_products: FillCartProgressProduct[];
+  failed_products: FillCartProgressProduct[];
+  cart_url: string | null;
+  error: string | null;
+  current_product: string | null;
+  updatedAt: number;
+};
+
+const fillCartProgressStore = new Map<string, FillCartProgressState>();
+
+function updateFillCartProgress(
+  jobId: string,
+  update: Partial<Omit<FillCartProgressState, "updatedAt">>,
+): void {
+  const existing = fillCartProgressStore.get(jobId);
+  if (!existing) return;
+  const updatedAt = Date.now();
+  fillCartProgressStore.set(jobId, { ...existing, ...update, updatedAt });
+}
+
+export function getFillCartProgress(jobId: string): FillCartProgressState | null {
+  const entry = fillCartProgressStore.get(jobId);
+  if (!entry) return null;
+  if (Date.now() - entry.updatedAt > FILL_CART_PROGRESS_TTL_MS) {
+    fillCartProgressStore.delete(jobId);
+    return null;
+  }
+  return entry;
+}
 
 // --- OpenAI Translation ---
 async function translateToFrench(productName: string): Promise<string[]> {
@@ -69,8 +107,14 @@ The translations should be practical search terms that would work in a grocery s
 }
 
 // --- Browser Use API ---
-async function fillShoppingCart(products: Array<{ name: string; quantity: string }>) {
+type FillCartProgressCallback = (update: Partial<FillCartProgressState>) => void;
+
+async function fillShoppingCart(
+  products: Array<{ name: string; quantity: string }>,
+  options?: { onProgress: FillCartProgressCallback },
+) {
   const client = new BrowserUseClient({ apiKey: BROWSER_USE_API_KEY });
+  const onProgress = options?.onProgress;
 
   const shop = {
     name: "Carrefour",
@@ -85,8 +129,9 @@ async function fillShoppingCart(products: Array<{ name: string; quantity: string
       startUrl: shop.startUrl
     });
 
-    let addedProducts = [];
-    let failedProducts = [];
+    let addedProducts: Array<{ name: string; quantity: string }> = [];
+    let failedProducts: Array<{ name: string; quantity: string }> = [];
+    let lastTaskResult: Awaited<ReturnType<typeof initialTask.complete>> | null = null;
 
     const initialTaskDesc = `
     If you are asked to choose a new address or resume shopping, choose option called "Choisir un autre Drive ou une autre adresse de livraison", 
@@ -104,7 +149,11 @@ async function fillShoppingCart(products: Array<{ name: string; quantity: string
 
         await initialTask.complete();
 
-    for (let product of products) {
+    for (let i = 0; i < products.length; i++) {
+      const product = products[i];
+      const nextProduct = products[i + 1]?.name ?? null;
+      onProgress?.({ status: "running", current_product: product.name });
+
       // Get French translations from OpenAI
       const translations = await translateToFrench(product.name);
 
@@ -124,21 +173,52 @@ async function fillShoppingCart(products: Array<{ name: string; quantity: string
 
         // Get final result
         const result = await task.complete();
+        lastTaskResult = result;
         console.log(`[${product.name}] Task completed:`, result.status);
 
         addedProducts.push({ ...product });
+        onProgress?.({
+          added_products: [...addedProducts],
+          failed_products: [...failedProducts],
+          current_product: nextProduct,
+        });
       } catch (e) {
         console.error(`[${product.name}] Failed to add:`, e);
         failedProducts.push({ ...product });
+        onProgress?.({
+          added_products: [...addedProducts],
+          failed_products: [...failedProducts],
+          current_product: nextProduct,
+        });
       }
     }
+
+    const lastUrl =
+      lastTaskResult?.steps?.length &&
+      lastTaskResult.steps[lastTaskResult.steps.length - 1]?.url
+        ? lastTaskResult.steps[lastTaskResult.steps.length - 1].url
+        : "https://www.carrefour.fr/mon-panier";
+
+    onProgress?.({
+      status: "completed",
+      added_products: addedProducts,
+      failed_products: failedProducts,
+      cart_url: lastUrl,
+      current_product: null,
+    });
 
     return {
       success: true,
       added_products: addedProducts,
-      failed_products: failedProducts
+      failed_products: failedProducts,
+      cart_url: lastUrl,
     };
   } catch (error: any) {
+    onProgress?.({
+      status: "failed",
+      error: error.message,
+      current_product: null,
+    });
     return {
       success: false,
       error: error.message,
@@ -214,59 +294,143 @@ const server = new McpServer(
       },
       _meta: {
         ui: { visibility: ["model", "app"] as const },
+        "openai/toolInvocation/invoking":
+          "Starting to add items to your cart…",
+        "openai/toolInvocation/invoked":
+          "Cart fill started. Track progress in the plan above.",
       },
     },
     async ({ products }) => {
-      const result = await fillShoppingCart(products);
+      const jobId = randomUUID();
+      // #region agent log
+      console.log("[fill-cart] invoked", { jobId, productsCount: products?.length ?? 0 });
+      fetch("http://127.0.0.1:7247/ingest/47f13895-01ff-45bb-8d2b-39b520b23527", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          location: "server.ts:fill-cart:entry",
+          message: "fill-cart invoked",
+          data: { jobId, productsCount: products?.length ?? 0 },
+          timestamp: Date.now(),
+          hypothesisId: "H1",
+        }),
+      }).catch(() => {});
+      // #endregion
+      const now = Date.now();
+      fillCartProgressStore.set(jobId, {
+        status: "started",
+        added_products: [],
+        failed_products: [],
+        cart_url: null,
+        error: null,
+        current_product: null,
+        updatedAt: now,
+      });
 
-      if (result.success) {
-        const addedCount = result.added_products?.length || 0;
-        const failedCount = result.failed_products?.length || 0;
+      void fillShoppingCart(products, {
+        onProgress: (update) => updateFillCartProgress(jobId, update),
+      });
 
-        let message = `Shopping cart update complete:\n`;
-
-        if (addedCount > 0) {
-          message += `✅ Successfully added ${addedCount} item${addedCount === 1 ? '' : 's'}`;
-          if (addedCount <= 3) {
-            const addedNames = result.added_products?.map(p => p.name).join(', ');
-            message += `: ${addedNames}`;
-          }
-          message += '\n';
-        }
-
-        if (failedCount > 0) {
-          message += `❌ Failed to add ${failedCount} item${failedCount === 1 ? '' : 's'}`;
-          if (failedCount <= 3) {
-            const failedNames = result.failed_products?.map(p => p.name).join(', ');
-            message += `: ${failedNames}`;
-          }
-        }
-
-        return {
-          structuredContent: {
-            added_products: result.added_products,
-            failed_products: result.failed_products,
-            cart_url: "https://www.carrefour.fr/mon-panier",
+      return {
+        structuredContent: {
+          jobId,
+          status: "started",
+        },
+        content: [
+          {
+            type: "text" as const,
+            text: "Started adding items to your cart. You can track progress in the plan.",
           },
-          content: [
-            {
-              type: "text" as const,
-              text: message.trim(),
-            },
-          ],
-          isError: failedCount === products.length, // Only error if ALL failed
+        ],
+        _meta: { taskId: jobId },
+      };
+    },
+  )
+  // ── check_fill_cart_progress (private tool: widget-only; server long-polls) ──
+  .registerTool(
+    "check_fill_cart_progress",
+    {
+      description:
+        "Check progress of a fill-cart job. Used by the app/widget only to poll for live updates.",
+      inputSchema: {
+        jobId: z.string().describe("Fill-cart job ID returned when the job was started"),
+      },
+      _meta: {
+        ui: { visibility: ["app"] as const },
+        "openai/widgetAccessible": true,
+        "openai/toolInvocation/invoking": "Checking cart progress…",
+        "openai/toolInvocation/invoked": "Progress updated.",
+      },
+    },
+    async ({ jobId }) => {
+      const progress = getFillCartProgress(jobId);
+
+      // #region agent log
+      console.log("[check_fill_cart_progress] invoked", {
+        jobId,
+        progressFound: !!progress,
+        status: progress?.status ?? null,
+      });
+      fetch("http://127.0.0.1:7247/ingest/47f13895-01ff-45bb-8d2b-39b520b23527", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          location: "server.ts:check_fill_cart_progress:entry",
+          message: "check_fill_cart_progress invoked",
+          data: { jobId, progressFound: !!progress, status: progress?.status },
+          timestamp: Date.now(),
+          hypothesisId: "H2_H5",
+        }),
+      }).catch(() => {});
+      // #endregion
+
+      if (!progress) {
+        const payload = {
+          status: "not_found" as const,
+          error: "Job not found or expired",
+          added_products: [] as FillCartProgressProduct[],
+          failed_products: [] as FillCartProgressProduct[],
+          cart_url: null as string | null,
+          current_product: null as string | null,
         };
-      } else {
         return {
+          structuredContent: payload,
           content: [
             {
               type: "text" as const,
-              text: `Failed to fill shopping cart: ${result.error}`,
+              text: `Job not found or expired.\n${JSON.stringify(payload)}`,
             },
           ],
-          isError: true,
         };
       }
+
+      const payload = {
+        status: progress.status,
+        added_products: progress.added_products,
+        failed_products: progress.failed_products,
+        cart_url: progress.cart_url,
+        error: progress.error,
+        current_product: progress.current_product,
+      };
+      const addedNames = progress.added_products.map((p) => p.name).join(", ");
+      const humanText =
+        progress.status === "completed" || progress.status === "failed"
+          ? `Cart ${progress.status}. ${progress.added_products.length} added, ${progress.failed_products.length} failed.`
+          : progress.added_products.length > 0
+            ? `Added: ${addedNames || "—"}. ${progress.current_product ? `Now: ${progress.current_product}` : ""}`
+            : progress.current_product
+              ? `Adding: ${progress.current_product}`
+              : `Progress: ${progress.status}.`;
+
+      return {
+        structuredContent: payload,
+        content: [
+          {
+            type: "text" as const,
+            text: `${humanText}\n${JSON.stringify(payload)}`,
+          },
+        ],
+      };
     },
   )
   // ── single-card (widget: 1 card full width) ──
