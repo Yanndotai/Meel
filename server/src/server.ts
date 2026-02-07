@@ -280,77 +280,60 @@ const CardConfigSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+const MealSchema = z.object({
+  name: z.string(),
+  prep_time: z.number(),
+  calories: z.number(),
+});
+
+const DayMealsSchema = z.object({
+  lunch: MealSchema,
+  dinner: MealSchema,
+});
+
+const ShowPlanInputSchema = z.object({
+  meal_plan: z.record(z.string(), DayMealsSchema),
+  ingredients: z.array(
+    z.object({
+      name: z.string(),
+      quantity: z.number(),
+      unit: z.string(),
+    }),
+  ),
+  message: z.string(),
+});
+
+const IngredientSchema = z.object({
+  name: z.string(),
+  quantity: z.number(),
+  unit: z.string(),
+});
+
 // --- MCP Server ---
 const server = new McpServer(
   { name: "meal-planner", version: "0.0.1" },
   { capabilities: {} },
 )
-  // ── get-profile (headless tool) ──
+  // ── accept-plan (headless: print shopping list when user accepts plan) ──
   .registerTool(
-    "get-profile",
+    "accept-plan",
     {
       description:
-        "Retrieve the user's saved preferences. Returns known fields and a list of missing fields. IMPORTANT: After calling this, you MUST use 'single-card' or 'two-cards' to ask the user about missing fields using interactive question cards. NEVER ask questions as plain text — always use the card widgets. If the profile is complete (no missing fields), call 'show-plan' directly.",
+        "Call this ONLY when the user has accepted the final meal plan (e.g. says they like it, will use it, or confirms). Pass the ingredients from the plan you just showed — the same ingredients you used in the last show-plan call (from chat history). Do not call before the user has accepted the plan.",
       inputSchema: {
-        user_id: z.string().describe("Unique user identifier"),
+        ingredients: z
+          .array(IngredientSchema)
+          .describe("Ingredients from the accepted plan: { name, quantity, unit }"),
       },
     },
-    async ({ user_id }) => {
-      const profiles = readJSON(PROFILES_PATH);
-      const profile = profiles[user_id] || {};
-
-      const allFields = [
-        "diet",
-        "household_size",
-        "budget",
-        "allergies",
-        "cuisine_preferences",
-        "cooking_time",
-        "days",
-      ];
-      const known = Object.keys(profile);
-      const missing = allFields.filter((f) => !known.includes(f));
-
-      return {
-        structuredContent: { profile, missing_fields: missing },
-        content: [
-          {
-            type: "text" as const,
-            text: missing.length === 0
-              ? "Profile is complete. Ready to generate a meal plan."
-              : `Profile has ${known.length}/${allFields.length} fields. Missing: ${missing.join(", ")}`,
-          },
-        ],
-      };
-    },
-  )
-  // ── save-preferences (headless tool) ──
-  .registerTool(
-    "save-preferences",
-    {
-      description:
-        "Save or update user preferences after the user answers a question. Merges new values into the existing profile. After saving, call 'single-card' or 'two-cards' to ask the next missing field, or call 'show-plan' if all fields are filled.",
-      inputSchema: {
-        user_id: z.string().describe("Unique user identifier"),
-        preferences: z
-          .record(z.string(), z.any())
-          .describe("Key-value pairs to save (e.g. { diet: 'vegetarian', household_size: 2 })"),
-      },
-    },
-    async ({ user_id, preferences }) => {
-      const profiles = readJSON(PROFILES_PATH);
-      profiles[user_id] = { ...profiles[user_id], ...preferences };
-      writeJSON(PROFILES_PATH, profiles);
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Saved preferences for ${user_id}: ${Object.keys(preferences).join(", ")}`,
-          },
-        ],
-      };
-    },
+    async ({ ingredients }) => ({
+      content: [
+        {
+          type: "text" as const,
+          text: "SHOPPING LIST: " + JSON.stringify(ingredients, null, 2),
+        },
+      ],
+    }),
   )
   // ── fill-cart (headless tool) ──
   .registerTool(
@@ -423,7 +406,7 @@ const server = new McpServer(
     { description: "Display a single card — question or info" },
     {
       description:
-        "REQUIRED for asking questions. Render a single full-width interactive card. Use type 'question' with clickable options for user input, or type 'info' for a read-only summary. When the user clicks an option, their selection is automatically sent back as a follow-up message. You MUST use this tool (or two-cards) instead of asking questions in plain text. Provide 3-5 options with emoji icons and short labels.",
+        "Use this to ask one preference question at a time. Chat history is your session storage: use it to track what the user has already answered and only ask for missing topics. When the user clicks an option, their selection is sent back as a follow-up message; then ask the next question or call show-plan if all are answered. Cover exactly these 7 topics (in any order): (1) What kind of diet do you follow? (2) How many people are you cooking for? (3) What's your rough weekly food budget? (4) Any allergies or foods you avoid? (5) Any favorite cuisines or flavors you love? (6) How much time do you want to spend cooking on a typical day? (7) Which days do you want to plan meals for? Use type 'question' with clickable options (3-5 options with emoji icons and short labels) or type 'info' for a read-only summary. You MUST use this tool (or two-cards) instead of asking in plain text.",
       inputSchema: {
         cards: z
           .array(CardConfigSchema)
@@ -444,7 +427,7 @@ const server = new McpServer(
     { description: "Display two cards side by side" },
     {
       description:
-        "Render two interactive cards side by side. Best used as: question card (left) + info summary card (right) showing known preferences. When the user clicks an option, their selection is automatically sent back as a follow-up message. You MUST use this tool (or single-card) instead of asking questions in plain text.",
+        "Render two cards side by side: question card (left) + optional info card (right) summarizing preferences already known from the conversation. Chat history is your session storage: use it to know what's been answered. Cover the same 7 topics as single-card: (1) What kind of diet do you follow? (2) How many people are you cooking for? (3) What's your rough weekly food budget? (4) Any allergies or foods you avoid? (5) Any favorite cuisines or flavors you love? (6) How much time do you want to spend cooking on a typical day? (7) Which days do you want to plan meals for? When the user clicks an option, their selection is sent back as a follow-up; then ask the next question or call show-plan if all are answered. You MUST use this tool (or single-card) instead of asking in plain text.",
       inputSchema: {
         cards: z
           .array(CardConfigSchema)
@@ -465,56 +448,45 @@ const server = new McpServer(
     { description: "Display the generated meal plan with shopping list" },
     {
       description:
-        "Generate and display a complete meal plan. The server reads the user profile, calls Dust to generate the plan, and renders MealPlanCard + IngredientsCard + ActionCard. Use this once the profile is complete.",
+        "Display a meal plan. You must generate the plan and ingredients yourself from the current conversation (diet, household size, budget, allergies, cuisines, cooking time, days). Then call this tool with the structured data to render it. Shape: meal_plan is an object keyed by day name (e.g. Monday, Tuesday), each value has lunch and dinner, each meal has name (string), prep_time (number, minutes), calories (number). ingredients is an array of { name, quantity, unit }. message is a short friendly text.",
       inputSchema: {
-        user_id: z
-          .string()
-          .describe("User identifier — server reads profile and generates plan"),
-        request: z
-          .string()
-          .optional()
-          .describe("Optional adjustment like 'swap Monday lunch' or 'more vegetarian options'"),
+        meal_plan: ShowPlanInputSchema.shape.meal_plan.describe(
+          "Day names -> { lunch: { name, prep_time, calories }, dinner: { name, prep_time, calories } }",
+        ),
+        ingredients: ShowPlanInputSchema.shape.ingredients.describe(
+          "Aggregated shopping list: { name, quantity, unit }",
+        ),
+        message: ShowPlanInputSchema.shape.message.describe(
+          "Short friendly message about the plan",
+        ),
       },
     },
-    async ({ user_id, request }) => {
-      const profiles = readJSON(PROFILES_PATH);
-      const profile = profiles[user_id] || {};
-      const prompt = buildDustPrompt(profile, request);
-
-      try {
-        const data = await createDustConversation(prompt, user_id);
-        const turns = data.conversation.content;
-        const lastTurn = turns[turns.length - 1];
-        const agentMsg = lastTurn.find(
-          (m: any) => m.type === "agent_message",
-        );
-        const agentContent = agentMsg?.content || "";
-        const parsed = parseDustResponse(agentContent);
-
-        return {
-          structuredContent: {
-            meal_plan: parsed.meal_plan,
-            ingredients: parsed.ingredients,
-            message: parsed.message,
-          },
-          content: [
-            {
-              type: "text" as const,
-              text: parsed.message,
-            },
-          ],
-        };
-      } catch (error: any) {
+    async ({ meal_plan, ingredients, message }) => {
+      const parsed = ShowPlanInputSchema.safeParse({
+        meal_plan,
+        ingredients,
+        message,
+      });
+      if (!parsed.success) {
         return {
           content: [
             {
               type: "text" as const,
-              text: `Error generating meal plan: ${error.message}`,
+              text: `Invalid show-plan input: ${parsed.error.message}`,
             },
           ],
           isError: true,
         };
       }
+      const { meal_plan: mp, ingredients: ing, message: msg } = parsed.data;
+      return {
+        structuredContent: {
+          meal_plan: mp,
+          ingredients: ing,
+          message: msg,
+        },
+        content: [{ type: "text" as const, text: msg }],
+      };
     },
   );
 
