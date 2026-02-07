@@ -47,11 +47,38 @@ const ShowPlanInputSchema = z.object({
   message: z.string(),
 });
 
+const IngredientSchema = z.object({
+  name: z.string(),
+  quantity: z.number(),
+  unit: z.string(),
+});
+
 // --- MCP Server ---
 const server = new McpServer(
   { name: "meal-planner", version: "0.0.1" },
   { capabilities: {} },
 )
+  // ── accept-plan (headless: print shopping list when user accepts plan) ──
+  .registerTool(
+    "accept-plan",
+    {
+      description:
+        "Call this ONLY when the user has accepted the final meal plan (e.g. says they like it, will use it, or confirms). Pass the ingredients from the plan you just showed — the same ingredients you used in the last show-plan call (from chat history). Do not call before the user has accepted the plan.",
+      inputSchema: {
+        ingredients: z
+          .array(IngredientSchema)
+          .describe("Ingredients from the accepted plan: { name, quantity, unit }"),
+      },
+    },
+    async ({ ingredients }) => ({
+      content: [
+        {
+          type: "text" as const,
+          text: "SHOPPING LIST: " + JSON.stringify(ingredients, null, 2),
+        },
+      ],
+    }),
+  )
   // ── single-card (widget: 1 card full width) ──
   .registerWidget(
     "single-card",

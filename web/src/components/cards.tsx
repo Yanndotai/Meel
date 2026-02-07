@@ -184,16 +184,23 @@ const DEFAULT_ACTIONS: Action[] = [
 export function ActionCard({
   actions = DEFAULT_ACTIONS,
   sendFollowUp,
+  onLooksPerfect,
 }: {
   actions?: Action[];
   sendFollowUp?: (prompt: string) => Promise<void>;
+  onLooksPerfect?: () => void | Promise<void>;
 }) {
   const [sent, setSent] = useState(false);
 
   const handleClick = async (action: Action) => {
-    if (sent || !sendFollowUp) return;
+    if (sent) return;
     setSent(true);
-    await sendFollowUp(action.message);
+    if (action.label === "Looks perfect" && onLooksPerfect) {
+      await onLooksPerfect();
+    }
+    if (sendFollowUp) {
+      await sendFollowUp(action.message);
+    }
   };
 
   return (
