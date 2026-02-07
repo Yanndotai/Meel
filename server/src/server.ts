@@ -4,6 +4,7 @@ import { z } from "zod";
 import fs from "fs";
 import path from "path";
 import { BrowserUse, BrowserUseClient } from "browser-use-sdk";
+import OpenAI from "openai";
 
 // --- Config ---
 const DUST_API_KEY = process.env.DUST_API_KEY!;
@@ -12,10 +13,14 @@ const DUST_AGENT_SID = process.env.DUST_AGENT_SID!;
 const DUST_BASE_URL = "https://dust.tt";
 
 const BROWSER_USE_API_KEY = process.env.BROWSER_USE_API_KEY!;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
 
 const DATA_DIR = path.resolve("./data");
 const PROFILES_PATH = path.join(DATA_DIR, "profiles.json");
 const SYSTEM_PROMPT_PATH = path.join(DATA_DIR, "dust-system-prompt.md");
+
+// --- OpenAI Client ---
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // --- Data helpers ---
 function readJSON(filePath: string): Record<string, any> {
@@ -116,6 +121,65 @@ function parseDustResponse(content: string): {
   }
 }
 
+// --- OpenAI Translation ---
+async function translateToFrench(productName: string): Promise<string[]> {
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-5.2-chat-latest",
+      messages: [
+        {
+          role: "system",
+          content: `You are a translation assistant helping customers find products at Carrefour, a French grocery store.
+When given a product name in English, provide the 3 most relevant French translations that would help someone search for this product at Carrefour.
+Sort them by relevance.
+The translations should be practical search terms that would work in a grocery store context.`
+        },
+        {
+          role: "user",
+          content: `Translate ${productName} to French for searching at Carrefour grocery store`
+        }
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "translations",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: {
+              translations: {
+                type: "array",
+                items: { type: "string" },
+                minItems: 1,
+                maxItems: 3,
+                description: "Array of French translations for the product"
+              }
+            },
+            required: ["translations"],
+            additionalProperties: false
+          }
+        }
+      }
+    });
+
+    const content = completion.choices[0]?.message?.content;
+
+    if (!content) {
+      return [productName]; // Fallback to original name
+    }
+
+    const parsed = JSON.parse(content);
+    if (parsed.translations && Array.isArray(parsed.translations) && parsed.translations.length > 0) {
+      return parsed.translations;
+    }
+
+    return [productName]; // Fallback to original name
+  } catch (error) {
+    console.error(`Failed to translate "${productName}":`, error);
+    return [productName]; // Fallback to original name on error
+  }
+}
+
 // --- Browser Use API ---
 async function fillShoppingCart(products: Array<{ name: string; quantity: string }>) {
   const client = new BrowserUseClient({ apiKey: BROWSER_USE_API_KEY });
@@ -136,23 +200,47 @@ async function fillShoppingCart(products: Array<{ name: string; quantity: string
     let addedProducts = [];
     let failedProducts = [];
 
+    const initialTaskDesc = `
+    If you are asked to choose a new address or resume shopping, choose option called "Choisir un autre Drive ou une autre adresse de livraison", 
+    than choose "Livraison", use "16 Boulevard Haussmann, 75009 Paris", wait up to 10 seconds and select address if asked.
+    For date, choose 11th February, any time after 10:00 AM.
+
+    IF you are not asked anything, report success.
+    `
+
+    const initialTask = await client.tasks.createTask({
+          task: initialTaskDesc,
+          sessionId: session.id,
+          maxSteps: 10
+        });
+
+        await initialTask.complete();
 
     for (let product of products) {
+      // Get French translations from OpenAI
+      const translations = await translateToFrench(product.name);
+
       const taskDescription = `
-  Navigate to ${shop.startUrl}.
-Search for "${product}" using the site's search bar. The desired quantity/size is "${product.quantity}".
-From the search results, pick the most relevant product.
-Click on the product to open its detail page.`;
+      Go to ${shop.startUrl} and search for "${product.name}". 
+      Make all searches in French. French translation of the "${product.name}" might be "${translations.join('","')}". Start searching with them, starting with the first.
+        Add to cart at least ${product.quantity} amount of the product.
+        If the product cannot be delivered, find another option of the same product. Report success only if the product is added to the cart.
+        `;
       try {
         const task = await client.tasks.createTask({
           task: taskDescription,
           sessionId: session.id,
+          maxSteps: 4,
+          llm: "browser-use-2.0"
         });
 
-        await task.complete();
+        // Get final result
+        const result = await task.complete();
+        console.log(`[${product.name}] Task completed:`, result.status);
+
         addedProducts.push({ ...product });
       } catch (e) {
-        console.error(`Failed to add ${product.name}`, e);
+        console.error(`[${product.name}] Failed to add:`, e);
         failedProducts.push({ ...product });
       }
     }
