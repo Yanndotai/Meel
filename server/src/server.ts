@@ -1,125 +1,13 @@
 import "dotenv/config";
 import { McpServer } from "skybridge/server";
 import { z } from "zod";
-import fs from "fs";
-import path from "path";
 import { BrowserUse, BrowserUseClient } from "browser-use-sdk";
 import OpenAI from "openai";
-
-// --- Config ---
-const DUST_API_KEY = process.env.DUST_API_KEY!;
-const DUST_WORKSPACE_ID = process.env.DUST_WORKSPACE_ID!;
-const DUST_AGENT_SID = process.env.DUST_AGENT_SID!;
-const DUST_BASE_URL = "https://dust.tt";
 
 const BROWSER_USE_API_KEY = process.env.BROWSER_USE_API_KEY!;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
 
-const DATA_DIR = path.resolve("./data");
-const PROFILES_PATH = path.join(DATA_DIR, "profiles.json");
-const SYSTEM_PROMPT_PATH = path.join(DATA_DIR, "dust-system-prompt.md");
-
-// --- OpenAI Client ---
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-
-// --- Data helpers ---
-function readJSON(filePath: string): Record<string, any> {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
-  } catch {
-    return {};
-  }
-}
-
-function writeJSON(filePath: string, data: any) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-}
-
-// --- Dust API ---
-async function createDustConversation(message: string, userId: string) {
-  const res = await fetch(
-    `${DUST_BASE_URL}/api/v1/w/${DUST_WORKSPACE_ID}/assistant/conversations`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${DUST_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: {
-          content: message,
-          mentions: [{ configurationId: DUST_AGENT_SID }],
-          context: {
-            username: userId,
-            timezone: "Europe/Paris",
-            origin: "api" as const,
-          },
-        },
-        blocking: true,
-      }),
-    },
-  );
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Dust API error ${res.status}: ${text}`);
-  }
-
-  return res.json();
-}
-
-// --- Build Dust prompt from user profile ---
-function buildDustPrompt(
-  profile: Record<string, any>,
-  request?: string,
-): string {
-  let systemPrompt = "";
-  try {
-    systemPrompt = fs.readFileSync(SYSTEM_PROMPT_PATH, "utf-8");
-  } catch {
-    systemPrompt = "You are a meal planning assistant. Generate a meal plan.";
-  }
-
-  const profileSummary = Object.entries(profile)
-    .map(([key, value]) => `- ${key}: ${value}`)
-    .join("\n");
-
-  let prompt = `${systemPrompt}\n\n## User Profile\n${profileSummary}`;
-
-  if (request) {
-    prompt += `\n\n## User Request\n${request}`;
-  } else {
-    prompt += "\n\n## Task\nGenerate a weekly meal plan based on the profile above.";
-  }
-
-  return prompt;
-}
-
-// --- Parse Dust structured response ---
-function parseDustResponse(content: string): {
-  meal_plan: Record<string, any>;
-  ingredients: any[];
-  message: string;
-} {
-  try {
-    const jsonMatch = content.match(/```json?\s*([\s\S]*?)```/);
-    const raw = jsonMatch ? jsonMatch[1].trim() : content.trim();
-    const parsed = JSON.parse(raw);
-    return {
-      meal_plan: parsed.meal_plan || parsed.data?.meal_plan || {},
-      ingredients: parsed.ingredients || parsed.data?.ingredients || [],
-      message:
-        parsed.text || parsed.message || "Here's your meal plan!",
-    };
-  } catch {
-    return {
-      meal_plan: {},
-      ingredients: [],
-      message: "Failed to parse meal plan response.",
-    };
-  }
-}
 
 // --- OpenAI Translation ---
 async function translateToFrench(productName: string): Promise<string[]> {
@@ -303,39 +191,12 @@ const ShowPlanInputSchema = z.object({
   message: z.string(),
 });
 
-const IngredientSchema = z.object({
-  name: z.string(),
-  quantity: z.number(),
-  unit: z.string(),
-});
-
 // --- MCP Server ---
 const server = new McpServer(
   { name: "meal-planner", version: "0.0.1" },
   { capabilities: {} },
 )
-  // ── accept-plan (headless: print shopping list when user accepts plan) ──
-  .registerTool(
-    "accept-plan",
-    {
-      description:
-        "Call this ONLY when the user has accepted the final meal plan (e.g. says they like it, will use it, or confirms). Pass the ingredients from the plan you just showed — the same ingredients you used in the last show-plan call (from chat history). Do not call before the user has accepted the plan.",
-      inputSchema: {
-        ingredients: z
-          .array(IngredientSchema)
-          .describe("Ingredients from the accepted plan: { name, quantity, unit }"),
-      },
-    },
-    async ({ ingredients }) => ({
-      content: [
-        {
-          type: "text" as const,
-          text: "SHOPPING LIST: " + JSON.stringify(ingredients, null, 2),
-        },
-      ],
-    }),
-  )
-  // ── fill-cart (headless tool) ──
+  // ── fill-cart (headless tool; callable from widget "Looks perfect" button) ──
   .registerTool(
     "fill-cart",
     {
@@ -350,6 +211,9 @@ const server = new McpServer(
             }),
           )
           .describe("Array of products to add to the cart")
+      },
+      _meta: {
+        ui: { visibility: ["model", "app"] as const },
       },
     },
     async ({ products }) => {
@@ -379,6 +243,11 @@ const server = new McpServer(
         }
 
         return {
+          structuredContent: {
+            added_products: result.added_products,
+            failed_products: result.failed_products,
+            cart_url: "https://www.carrefour.fr/mon-panier",
+          },
           content: [
             {
               type: "text" as const,

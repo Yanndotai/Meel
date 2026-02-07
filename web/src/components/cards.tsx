@@ -167,6 +167,79 @@ export function IngredientsCard({
   );
 }
 
+/* ── Fill cart progress ── */
+
+export interface FillCartProduct {
+  name: string;
+  quantity: string;
+}
+
+export interface FillCartResult {
+  added_products: FillCartProduct[];
+  failed_products: FillCartProduct[];
+  cart_url?: string | null;
+}
+
+export function FillCartProgress({
+  status,
+  products,
+  simulatedCompleted,
+  result,
+}: {
+  status: "shopping" | "done";
+  products: FillCartProduct[];
+  simulatedCompleted: number;
+  result?: FillCartResult | null;
+}) {
+  const addedSet = new Set(
+    (result?.added_products ?? []).map((p) => `${p.name}:${p.quantity}`),
+  );
+  const failedSet = new Set(
+    (result?.failed_products ?? []).map((p) => `${p.name}:${p.quantity}`),
+  );
+  const cartUrl = result?.cart_url || "#";
+
+  return (
+    <Card className="card-action fill-cart-progress">
+      <p className="action-text">
+        {status === "shopping"
+          ? "Started shopping for items:"
+          : "Shopping complete"}
+      </p>
+      <ul className="fill-cart-list">
+        {products.map((product, index) => {
+          const key = `${product.name}:${product.quantity}`;
+          const isSimulatedDone = status === "shopping" && index < simulatedCompleted;
+          const isAdded = addedSet.has(key);
+          const isFailed = failedSet.has(key);
+          const crossed =
+            status === "done"
+              ? result ? isAdded : true
+              : isSimulatedDone;
+          return (
+            <li
+              key={key}
+              className={`fill-cart-item${crossed ? " crossed" : ""}${isFailed && status === "done" ? " failed" : ""}`}
+            >
+              {product.name} ({product.quantity})
+            </li>
+          );
+        })}
+      </ul>
+      {status === "done" && (
+        <a
+          href={cartUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn btn-primary fill-cart-buy-btn"
+        >
+          Buy now
+        </a>
+      )}
+    </Card>
+  );
+}
+
 /* ── Action Card ── */
 
 interface Action {
@@ -188,15 +261,47 @@ export function ActionCard({
 }: {
   actions?: Action[];
   sendFollowUp?: (prompt: string) => Promise<void>;
-  onLooksPerfect?: () => void | Promise<void>;
+  onLooksPerfect?: () => void | Promise<void | boolean>;
 }) {
   const [sent, setSent] = useState(false);
 
   const handleClick = async (action: Action) => {
+    // #region agent log
+    fetch("http://127.0.0.1:7247/ingest/47f13895-01ff-45bb-8d2b-39b520b23527", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        location: "cards.tsx:ActionCard:handleClick:entry",
+        message: "action button clicked",
+        data: {
+          actionLabel: action.label,
+          hasOnLooksPerfect: !!onLooksPerfect,
+          sent,
+          isLooksPerfectBranch: action.label === "Looks perfect",
+        },
+        timestamp: Date.now(),
+        hypothesisId: "H4",
+      }),
+    }).catch(() => {});
+    // #endregion
     if (sent) return;
     setSent(true);
     if (action.label === "Looks perfect" && onLooksPerfect) {
-      await onLooksPerfect();
+      // #region agent log
+      fetch("http://127.0.0.1:7247/ingest/47f13895-01ff-45bb-8d2b-39b520b23527", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          location: "cards.tsx:ActionCard:invoking onLooksPerfect",
+          message: "calling onLooksPerfect",
+          data: {},
+          timestamp: Date.now(),
+          hypothesisId: "H5",
+        }),
+      }).catch(() => {});
+      // #endregion
+      const handled = await onLooksPerfect();
+      if (handled === true && sendFollowUp) return;
     }
     if (sendFollowUp) {
       await sendFollowUp(action.message);

@@ -294,6 +294,47 @@ body {
   gap: 8px;
 }
 
+/* ── Fill cart progress ── */
+.fill-cart-progress {
+  text-align: left;
+}
+
+.fill-cart-progress .action-text {
+  margin-bottom: 12px;
+}
+
+.fill-cart-list {
+  list-style: none;
+  margin-bottom: 16px;
+}
+
+.fill-cart-item {
+  font-size: 0.85rem;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  transition: opacity 0.2s ease;
+}
+
+.fill-cart-item:last-child {
+  border-bottom: none;
+}
+
+.fill-cart-item.crossed {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.fill-cart-item.failed {
+  color: var(--c-text-2);
+  opacity: 0.8;
+}
+
+.fill-cart-buy-btn {
+  display: inline-block;
+  text-decoration: none;
+  margin-top: 4px;
+}
+
 /* ── Buttons ── */
 .btn {
   font-family: var(--font);
