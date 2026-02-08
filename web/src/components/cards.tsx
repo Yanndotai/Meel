@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { PixelLoader } from "./pixel-loader";
 
 /* ── Types ── */
@@ -7,6 +7,7 @@ export interface Meal {
   name: string;
   prep_time: number;
   calories: number;
+  image_url?: string | null;
 }
 
 export interface DayMeals {
@@ -50,10 +51,19 @@ export function CardHeader({
 
 /* ── Meal Plan Card ── */
 
+function resolveImageSrc(url: string | null | undefined, baseUrl: string): string {
+  if (!url) return "";
+  if (url.startsWith("data:") || url.startsWith("http://") || url.startsWith("https://")) return url;
+  const base = baseUrl.replace(/\/$/, "");
+  return base ? `${base}${url.startsWith("/") ? url : `/${url}`}` : url;
+}
+
 export function MealPlanCard({
   meal_plan,
+  imageBaseUrl = "",
 }: {
   meal_plan: Record<string, DayMeals>;
+  imageBaseUrl?: string;
 }) {
   const days = Object.entries(meal_plan);
 
@@ -92,6 +102,16 @@ export function MealPlanCard({
             <div className="day-name">{day}</div>
             {meals.lunch && (
               <div className="meal-item">
+                {meals.lunch.image_url ? (
+                  <div className="meal-image-wrap">
+                    <img
+                      src={resolveImageSrc(meals.lunch.image_url, imageBaseUrl)}
+                      alt={meals.lunch.name}
+                      className="meal-image"
+                      loading="lazy"
+                    />
+                  </div>
+                ) : null}
                 <span className="meal-type">Lunch</span>
                 <span className="meal-name">{meals.lunch.name}</span>
                 <div className="meal-meta">
@@ -103,6 +123,16 @@ export function MealPlanCard({
             {meals.lunch && meals.dinner && <div className="meal-divider" />}
             {meals.dinner && (
               <div className="meal-item">
+                {meals.dinner.image_url ? (
+                  <div className="meal-image-wrap">
+                    <img
+                      src={resolveImageSrc(meals.dinner.image_url, imageBaseUrl)}
+                      alt={meals.dinner.name}
+                      className="meal-image"
+                      loading="lazy"
+                    />
+                  </div>
+                ) : null}
                 <span className="meal-type">Dinner</span>
                 <span className="meal-name">{meals.dinner.name}</span>
                 <div className="meal-meta">

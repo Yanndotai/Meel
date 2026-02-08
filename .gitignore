@@ -3,3 +3,6 @@ dist/
 .env*
 .DS_store
 *.tsbuildinfo
+data/recipe-images/
+.cursor/
+.pnpm-store/

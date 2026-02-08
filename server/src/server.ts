@@ -2,6 +2,7 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { McpServer } from "skybridge/server";
 import { z } from "zod";
+import { fal } from "@fal-ai/client";
 import { BrowserUse, BrowserUseClient } from "browser-use-sdk";
 import OpenAI from "openai";
 
@@ -259,6 +260,70 @@ const CardConfigSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+// --- Fal AI (recipe images: nano-banana text-to-image) ---
+const FAL_IMAGE_HOST_ALLOWLIST = [
+  "fal.media",
+  "fal.ai",
+  "storage.googleapis.com", // Fal uses paths like /falserverless/...
+];
+
+function isAllowedImageUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:") return false;
+    if (u.hostname === "storage.googleapis.com")
+      return u.pathname.includes("falserverless");
+    return FAL_IMAGE_HOST_ALLOWLIST.some((h) => u.hostname === h || u.hostname.endsWith("." + h));
+  } catch {
+    return false;
+  }
+}
+
+/** Fetch image from Fal and return a data URL (base64) for use in img src. */
+export async function recipeImageToDataUrl(falImageUrl: string): Promise<string | null> {
+  if (!isAllowedImageUrl(falImageUrl)) return null;
+  try {
+    const response = await fetch(falImageUrl, { redirect: "follow" });
+    if (!response.ok) return null;
+    const contentType = response.headers.get("content-type") || "image/png";
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const base64 = buffer.toString("base64");
+    const dataUrl = `data:${contentType.split(";")[0]};base64,${base64}`;
+    console.log("[recipe-image] Encoded as data URL:", { falUrl: falImageUrl, contentType: contentType.split(";")[0], sizeBytes: buffer.length });
+    return dataUrl;
+  } catch (err) {
+    console.warn("[recipe-image] Fetch/encode failed:", err);
+    return null;
+  }
+}
+
+export { isAllowedImageUrl };
+
+async function generateRecipeImage(recipeName: string): Promise<string | null> {
+  if (!process.env.FAL_KEY) {
+    console.warn("[fal] FAL_KEY not set, skipping recipe image");
+    return null;
+  }
+  console.log("[show-plan] Generating image for recipe:", recipeName);
+  try {
+    const result = await fal.subscribe("fal-ai/nano-banana", {
+      input: {
+        prompt: `Appetizing food photography of ${recipeName}, professional dish presentation, high quality`,
+      },
+    });
+    const url = (result.data as { images?: Array<{ url?: string }> })?.images?.[0]?.url;
+    if (!url) {
+      console.warn("[fal] No image URL in response for:", recipeName);
+      return null;
+    }
+    console.log("[show-plan] Fal image URL for", recipeName, "->", url);
+    return url;
+  } catch (err) {
+    console.warn("[fal] Image generation failed for", recipeName, err);
+    return null;
+  }
+}
+
 const MealSchema = z.object({
   name: z.string(),
   prep_time: z.number(),
@@ -269,6 +334,8 @@ const DayMealsSchema = z.object({
   lunch: MealSchema.optional(),
   dinner: MealSchema.optional(),
 });
+
+type DayMealsParsed = z.infer<typeof DayMealsSchema>;
 
 const ShowPlanInputSchema = z.object({
   meal_plan: z.record(z.string(), DayMealsSchema),
@@ -491,11 +558,62 @@ const server = new McpServer(
         };
       }
       const { meal_plan: mp, ingredients: ing, message: msg } = parsed.data;
+
+      // Collect all meals and generate images in parallel
+      type MealTriple = {
+        day: string;
+        mealType: "lunch" | "dinner";
+        meal: { name: string; prep_time: number; calories: number };
+      };
+      const triples: MealTriple[] = [];
+      for (const [day, dayMeals] of Object.entries(mp)) {
+        if (dayMeals.lunch) triples.push({ day, mealType: "lunch", meal: dayMeals.lunch });
+        if (dayMeals.dinner) triples.push({ day, mealType: "dinner", meal: dayMeals.dinner });
+      }
+      console.log("[show-plan] Recipe image generation: meals count =", triples.length);
+      const falUrls = await Promise.all(
+        triples.map(({ meal }) => generateRecipeImage(meal.name)),
+      );
+      const imageDataUrls = await Promise.all(
+        falUrls.map((url) => (url ? recipeImageToDataUrl(url) : null)),
+      );
+      triples.forEach((t, i) => {
+        const dataUrl = imageDataUrls[i];
+        console.log("[show-plan] Image for", t.day, t.mealType, t.meal.name, "->", dataUrl ? `data:... (${dataUrl.length} chars)` : "(none)");
+      });
+
+      const meal_plan_enriched: Record<
+        string,
+        {
+          lunch?: { name: string; prep_time: number; calories: number; image_url: string | null };
+          dinner?: { name: string; prep_time: number; calories: number; image_url: string | null };
+        }
+      > = {};
+      for (const [day, dayMeals] of Object.entries(mp) as [string, DayMealsParsed][]) {
+        meal_plan_enriched[day] = {};
+        if (dayMeals.lunch) {
+          const i = triples.findIndex((t) => t.day === day && t.mealType === "lunch");
+          meal_plan_enriched[day].lunch = {
+            ...dayMeals.lunch,
+            image_url: i >= 0 ? imageDataUrls[i] ?? null : null,
+          };
+        }
+        if (dayMeals.dinner) {
+          const i = triples.findIndex((t) => t.day === day && t.mealType === "dinner");
+          meal_plan_enriched[day].dinner = {
+            ...dayMeals.dinner,
+            image_url: i >= 0 ? imageDataUrls[i] ?? null : null,
+          };
+        }
+      }
+
+      const appBaseUrl = process.env.PUBLIC_APP_URL?.replace(/\/$/, "") ?? "";
       return {
         structuredContent: {
-          meal_plan: mp,
+          meal_plan: meal_plan_enriched,
           ingredients: ing,
           message: msg,
+          app_base_url: appBaseUrl,
         },
         content: [{ type: "text" as const, text: msg }],
       };

@@ -18,6 +18,8 @@ interface ShowPlanOutput {
   meal_plan: Record<string, DayMeals>;
   ingredients: Ingredient[];
   message: string;
+  /** Server's public URL so recipe images load in ChatGPT iframe. */
+  app_base_url?: string;
 }
 
 interface ProgressPayload {
@@ -258,9 +260,11 @@ function ShowPlan() {
     setFillCartErrorMessage(null);
   };
 
+  const imageBaseUrl = data.app_base_url || (typeof window !== "undefined" ? window.location.origin : "");
+
   return (
     <div className="layout-trio">
-      <MealPlanCard meal_plan={data.meal_plan} />
+      <MealPlanCard meal_plan={data.meal_plan} imageBaseUrl={imageBaseUrl} />
       <IngredientsCard ingredients={data.ingredients} />
       {fillCartStatus === "idle" ? (
         <ActionCard
