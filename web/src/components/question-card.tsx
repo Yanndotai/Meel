@@ -13,24 +13,34 @@ interface QuestionCardProps {
   question: string;
   select_type: "single" | "multi";
   options: Option[];
+  onAnswer?: (question: string, answer: string) => void;
 }
 
 export function QuestionCard({
   question,
   select_type,
   options,
+  onAnswer,
 }: QuestionCardProps) {
   const sendFollowUp = useSendFollowUpMessage();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sent, setSent] = useState(false);
 
-  const handleSelect = async (option: Option) => {
+  const submit = (answer: string) => {
+    if (onAnswer) {
+      onAnswer(question, answer);
+    } else {
+      sendFollowUp(answer);
+    }
+  };
+
+  const handleSelect = (option: Option) => {
     if (sent) return;
 
     if (select_type === "single") {
       setSelected(new Set([option.value]));
       setSent(true);
-      await sendFollowUp(option.label);
+      submit(option.label);
     } else {
       setSelected((prev) => {
         const next = new Set(prev);
@@ -41,13 +51,13 @@ export function QuestionCard({
     }
   };
 
-  const handleConfirm = async () => {
+  const handleConfirm = () => {
     if (sent || selected.size === 0) return;
     setSent(true);
     const labels = options
       .filter((o) => selected.has(o.value))
       .map((o) => o.label);
-    await sendFollowUp(labels.join(", "));
+    submit(labels.join(", "));
   };
 
   return (

@@ -5,8 +5,8 @@ import { mountWidget } from "skybridge/web";
 import { useToolInfo, useSendFollowUpMessage } from "../helpers";
 import { CardRenderer, type CardConfig } from "../components/card-renderer";
 
-function TwoCards() {
-  const { output, isSuccess } = useToolInfo<"two-cards">();
+function FourCards() {
+  const { output, isSuccess } = useToolInfo<"four-cards">();
   const sendFollowUp = useSendFollowUpMessage();
   const answers = useRef<Record<string, string>>({});
 
@@ -30,7 +30,7 @@ function TwoCards() {
   if (!isSuccess || !output) return null;
 
   return (
-    <div className="layout-duo">
+    <div className="layout-quad">
       {cards.map((card, i) => (
         <CardRenderer key={i} card={card} onAnswer={handleAnswer} />
       ))}
@@ -38,6 +38,6 @@ function TwoCards() {
   );
 }
 
-export default TwoCards;
+export default FourCards;
 
-mountWidget(<TwoCards />);
+mountWidget(<FourCards />);

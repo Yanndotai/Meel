@@ -266,8 +266,8 @@ const MealSchema = z.object({
 });
 
 const DayMealsSchema = z.object({
-  lunch: MealSchema,
-  dinner: MealSchema,
+  lunch: MealSchema.optional(),
+  dinner: MealSchema.optional(),
 });
 
 const ShowPlanInputSchema = z.object({
@@ -277,6 +277,7 @@ const ShowPlanInputSchema = z.object({
       name: z.string(),
       quantity: z.number(),
       unit: z.string(),
+      estimated_price: z.number().optional(),
     }),
   ),
   message: z.string(),
@@ -438,7 +439,7 @@ const server = new McpServer(
     { description: "Display a single card — question or info" },
     {
       description:
-        "Use this to ask one preference question at a time. Chat history is your session storage: use it to track what the user has already answered and only ask for missing topics. When the user clicks an option, their selection is sent back as a follow-up message; then ask the next question or call show-plan if all are answered. Cover exactly these 7 topics (in any order): (1) What kind of diet do you follow? (2) How many people are you cooking for? (3) What's your rough weekly food budget? (4) Any allergies or foods you avoid? (5) Any favorite cuisines or flavors you love? (6) How much time do you want to spend cooking on a typical day? (7) Which days do you want to plan meals for? Use type 'question' with clickable options (3-5 options with emoji icons and short labels) or type 'info' for a read-only summary. You MUST use this tool (or two-cards) instead of asking in plain text.",
+        "Use this to ask ONE preference question only when you cannot batch it with other questions. IMPORTANT: On the first interaction, always prefer three-cards or four-cards to ask multiple independent questions at once. Only use single-card for follow-up questions that depend on previous answers or when exactly 1 question remains. Chat history is your session storage. IMPORTANT: Only ask about topics that are NOT already answered or implied by the user's message. If the user says 'dinner for tonight', do NOT ask about which meals or which days. Possible topics to cover (skip any already known): diet, household size, budget, allergies, favorite cuisines, cooking time. Use type 'question' with clickable options (3-5 options with emoji icons and short labels) or type 'info' for a read-only summary.",
       inputSchema: {
         cards: z
           .array(CardConfigSchema)
@@ -459,12 +460,54 @@ const server = new McpServer(
     { description: "Display two cards side by side" },
     {
       description:
-        "Render two cards side by side: question card (left) + optional info card (right) summarizing preferences already known from the conversation. Chat history is your session storage: use it to know what's been answered. Cover the same 7 topics as single-card: (1) What kind of diet do you follow? (2) How many people are you cooking for? (3) What's your rough weekly food budget? (4) Any allergies or foods you avoid? (5) Any favorite cuisines or flavors you love? (6) How much time do you want to spend cooking on a typical day? (7) Which days do you want to plan meals for? When the user clicks an option, their selection is sent back as a follow-up; then ask the next question or call show-plan if all are answered. You MUST use this tool (or single-card) instead of asking in plain text.",
+        "Render exactly 2 cards side by side. Use when you have 2 independent questions to ask, or 1 question + 1 info summary. Chat history is your session storage. IMPORTANT: Only ask about topics NOT already answered or implied by the user's message. Prefer three-cards or four-cards to batch more questions. Only use two-cards when exactly 2 cards are needed.",
       inputSchema: {
         cards: z
           .array(CardConfigSchema)
           .length(2)
           .describe("Array with exactly 2 card configs"),
+      },
+    },
+    async ({ cards }) => ({
+      structuredContent: { cards },
+      content: [
+        { type: "text" as const, text: "Displaying cards." },
+      ],
+    }),
+  )
+  // ── three-cards (widget: 3 cards) ──
+  .registerWidget(
+    "three-cards",
+    { description: "Display three cards together" },
+    {
+      description:
+        "Render 3 cards at once (2 on top, 1 full-width below). Use this to ask 3 independent questions simultaneously, or 2-3 questions + an info summary. This is the PREFERRED tool for the first interaction: batch all independent questions into one call so the user answers them all at once. Chat history is your session storage. IMPORTANT: Only ask about topics NOT already answered or implied by the user's message. When the user answers, ask remaining questions or call show-plan if enough info is gathered.",
+      inputSchema: {
+        cards: z
+          .array(CardConfigSchema)
+          .length(3)
+          .describe("Array with exactly 3 card configs"),
+      },
+    },
+    async ({ cards }) => ({
+      structuredContent: { cards },
+      content: [
+        { type: "text" as const, text: "Displaying cards." },
+      ],
+    }),
+  )
+  // ── four-cards (widget: 4 cards in a 2x2 grid) ──
+  .registerWidget(
+    "four-cards",
+    { description: "Display four cards in a grid" },
+    {
+      description:
+        "Render 4 cards in a 2x2 grid. Use this to ask 4 independent questions at once, or 3 questions + an info summary. Ideal for the first interaction to batch as many independent questions as possible. Chat history is your session storage. IMPORTANT: Only ask about topics NOT already answered or implied by the user's message. When the user answers, ask remaining questions or call show-plan if enough info is gathered.",
+      inputSchema: {
+        cards: z
+          .array(CardConfigSchema)
+          .length(4)
+          .describe("Array with exactly 4 card configs"),
       },
     },
     async ({ cards }) => ({
@@ -480,13 +523,13 @@ const server = new McpServer(
     { description: "Display the generated meal plan with shopping list" },
     {
       description:
-        "Display a meal plan. You must generate the plan and ingredients yourself from the current conversation (diet, household size, budget, allergies, cuisines, cooking time, days). Then call this tool with the structured data to render it. Shape: meal_plan is an object keyed by day name (e.g. Monday, Tuesday), each value has lunch and dinner, each meal has name (string), prep_time (number, minutes), calories (number). ingredients is an array of { name, quantity, unit }. message is a short friendly text.",
+        "Display a meal plan. Generate the plan and ingredients from the conversation. Only include the meals the user asked for (lunch only, dinner only, or both). Shape: meal_plan is an object keyed by day name, each value has optional lunch and/or dinner (include only what was requested), each meal has name (string), prep_time (number, minutes), calories (number). ingredients is an array of { name, quantity, unit, estimated_price }. Always include estimated_price in euros for each ingredient. message is a short friendly text.",
       inputSchema: {
         meal_plan: ShowPlanInputSchema.shape.meal_plan.describe(
-          "Day names -> { lunch: { name, prep_time, calories }, dinner: { name, prep_time, calories } }",
+          "Day names -> { lunch?: { name, prep_time, calories }, dinner?: { name, prep_time, calories } }. Only include meals the user requested.",
         ),
         ingredients: ShowPlanInputSchema.shape.ingredients.describe(
-          "Aggregated shopping list: { name, quantity, unit }",
+          "Aggregated shopping list: { name, quantity, unit, estimated_price }. estimated_price is the estimated cost in euros.",
         ),
         message: ShowPlanInputSchema.shape.message.describe(
           "Short friendly message about the plan",

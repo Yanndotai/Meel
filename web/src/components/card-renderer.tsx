@@ -16,7 +16,13 @@ interface InfoCardConfig {
 
 export type CardConfig = QuestionCardConfig | InfoCardConfig;
 
-export function CardRenderer({ card }: { card: CardConfig }) {
+export function CardRenderer({
+  card,
+  onAnswer,
+}: {
+  card: CardConfig;
+  onAnswer?: (question: string, answer: string) => void;
+}) {
   switch (card.type) {
     case "question":
       return (
@@ -24,6 +30,7 @@ export function CardRenderer({ card }: { card: CardConfig }) {
           question={card.question}
           select_type={card.select_type}
           options={card.options}
+          onAnswer={onAnswer}
         />
       );
     case "info":

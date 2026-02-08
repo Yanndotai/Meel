@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
+import { PixelLoader } from "./pixel-loader";
 
 /* ── Types ── */
 
@@ -9,14 +10,15 @@ export interface Meal {
 }
 
 export interface DayMeals {
-  lunch: Meal;
-  dinner: Meal;
+  lunch?: Meal;
+  dinner?: Meal;
 }
 
 export interface Ingredient {
   name: string;
   quantity: number;
   unit: string;
+  estimated_price?: number;
 }
 
 /* ── Primitives ── */
@@ -56,13 +58,15 @@ export function MealPlanCard({
   const days = Object.entries(meal_plan);
 
   const totalCals = days.reduce(
-    (sum, [, m]) => sum + m.lunch.calories + m.dinner.calories,
+    (sum, [, m]) =>
+      sum + (m.lunch?.calories ?? 0) + (m.dinner?.calories ?? 0),
     0,
   );
   const avgCals = Math.round(totalCals / days.length);
 
   const totalPrep = days.reduce(
-    (sum, [, m]) => sum + m.lunch.prep_time + m.dinner.prep_time,
+    (sum, [, m]) =>
+      sum + (m.lunch?.prep_time ?? 0) + (m.dinner?.prep_time ?? 0),
     0,
   );
   const avgPrep = Math.round(totalPrep / days.length);
@@ -86,23 +90,27 @@ export function MealPlanCard({
         {days.map(([day, meals]) => (
           <div key={day} className="day-card">
             <div className="day-name">{day}</div>
-            <div className="meal-item">
-              <span className="meal-type">Lunch</span>
-              <span className="meal-name">{meals.lunch.name}</span>
-              <div className="meal-meta">
-                <span className="badge">{meals.lunch.calories} cal</span>
-                <span className="badge">{meals.lunch.prep_time} min</span>
+            {meals.lunch && (
+              <div className="meal-item">
+                <span className="meal-type">Lunch</span>
+                <span className="meal-name">{meals.lunch.name}</span>
+                <div className="meal-meta">
+                  <span className="badge">{meals.lunch.calories} cal</span>
+                  <span className="badge">{meals.lunch.prep_time} min</span>
+                </div>
               </div>
-            </div>
-            <div className="meal-divider" />
-            <div className="meal-item">
-              <span className="meal-type">Dinner</span>
-              <span className="meal-name">{meals.dinner.name}</span>
-              <div className="meal-meta">
-                <span className="badge">{meals.dinner.calories} cal</span>
-                <span className="badge">{meals.dinner.prep_time} min</span>
+            )}
+            {meals.lunch && meals.dinner && <div className="meal-divider" />}
+            {meals.dinner && (
+              <div className="meal-item">
+                <span className="meal-type">Dinner</span>
+                <span className="meal-name">{meals.dinner.name}</span>
+                <div className="meal-meta">
+                  <span className="badge">{meals.dinner.calories} cal</span>
+                  <span className="badge">{meals.dinner.prep_time} min</span>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         ))}
       </div>
@@ -128,11 +136,16 @@ export function IngredientsCard({
     });
   };
 
+  const totalPrice = ingredients.reduce(
+    (sum, ing) => sum + (ing.estimated_price ?? 0),
+    0,
+  );
+
   return (
     <Card>
       <CardHeader
         title="Shopping List"
-        detail={`${ingredients.length - checked.size} left`}
+        detail={totalPrice > 0 ? `~${totalPrice.toFixed(2)}€` : `${ingredients.length - checked.size} left`}
       />
       <div className="ingredients-list">
         {ingredients.map((ing, i) => (
@@ -160,6 +173,11 @@ export function IngredientsCard({
             <span className="ingredient-qty">
               {ing.quantity} {ing.unit}
             </span>
+            {ing.estimated_price != null && (
+              <span className="ingredient-price">
+                {ing.estimated_price.toFixed(2)}€
+              </span>
+            )}
           </div>
         ))}
       </div>
@@ -206,12 +224,51 @@ export function FillCartProgress({
     (failedSource?.failed_products ?? []).map((p) => `${p.name}:${p.quantity}`),
   );
 
+  // Real progress count from backend
+  const realProgressCount =
+    (progress?.added_products?.length ?? 0) + (progress?.failed_products?.length ?? 0);
+
+  // Staggered reveal: fake timer reveals items one by one during "shopping"
+  const [revealedCount, setRevealedCount] = useState(
+    status === "shopping" ? 1 : products.length,
+  );
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (status !== "shopping") {
+      // When done/error, show everything immediately
+      setRevealedCount(products.length);
+      return;
+    }
+
+    // If real progress exceeds our fake count, snap to it
+    if (realProgressCount > 0 && realProgressCount > revealedCount) {
+      setRevealedCount(realProgressCount);
+    }
+
+    intervalRef.current = setInterval(() => {
+      setRevealedCount((prev) => {
+        if (prev >= products.length) {
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, 1500);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [status, products.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const headingText =
     status === "shopping"
-      ? "Started shopping for items:"
+      ? "Shopping for your ingredients"
       : status === "done"
         ? "Shopping complete"
         : "Shopping";
+
+  const visibleProducts = products.slice(0, revealedCount);
 
   return (
     <Card className="card-action fill-cart-progress">
@@ -219,9 +276,7 @@ export function FillCartProgress({
         {headingText}
         {status === "shopping" && (
           <span className="fill-cart-loading" aria-hidden>
-            <span className="fill-cart-loading-dot" />
-            <span className="fill-cart-loading-dot" />
-            <span className="fill-cart-loading-dot" />
+            <PixelLoader status="loading" />
           </span>
         )}
       </p>
@@ -229,17 +284,38 @@ export function FillCartProgress({
         <p className="fill-cart-error-message">{errorMessage}</p>
       )}
       <ul className="fill-cart-list">
-        {products.map((product) => {
+        {visibleProducts.map((product, index) => {
           const key = `${product.name}:${product.quantity}`;
           const isAdded = addedSet.has(key);
           const isFailed = failedSet.has(key);
-          const crossed = isAdded || isFailed;
+          const isLast = index === revealedCount - 1;
+
+          // Determine pixel status for this item
+          let pixelStatus: "loading" | "done" | "error";
+          if (status === "done" || status === "error") {
+            pixelStatus = isFailed ? "error" : "done";
+          } else if (isLast && revealedCount < products.length) {
+            // Currently revealing item — still loading
+            pixelStatus = "loading";
+          } else if (isAdded) {
+            pixelStatus = "done";
+          } else if (isFailed) {
+            pixelStatus = "error";
+          } else {
+            // Already revealed, not yet confirmed by backend
+            pixelStatus = index < revealedCount - 1 ? "done" : "loading";
+          }
+
           return (
             <li
               key={key}
-              className={`fill-cart-item${crossed ? " crossed" : ""}${isFailed && status === "done" ? " failed" : ""}`}
+              className={`fill-cart-item fill-cart-item-enter${isFailed && status === "done" ? " failed" : ""}`}
+              style={{ animationDelay: `${index * 0.05}s` }}
             >
-              {product.name} ({product.quantity})
+              <PixelLoader status={pixelStatus} />
+              <span className="fill-cart-item-text">
+                {product.name} ({product.quantity})
+              </span>
             </li>
           );
         })}
