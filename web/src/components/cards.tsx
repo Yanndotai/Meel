@@ -224,42 +224,8 @@ export function FillCartProgress({
     (failedSource?.failed_products ?? []).map((p) => `${p.name}:${p.quantity}`),
   );
 
-  // Real progress count from backend
-  const realProgressCount =
-    (progress?.added_products?.length ?? 0) + (progress?.failed_products?.length ?? 0);
-
-  // Staggered reveal: fake timer reveals items one by one during "shopping"
-  const [revealedCount, setRevealedCount] = useState(
-    status === "shopping" ? 1 : products.length,
-  );
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    if (status !== "shopping") {
-      // When done/error, show everything immediately
-      setRevealedCount(products.length);
-      return;
-    }
-
-    // If real progress exceeds our fake count, snap to it
-    if (realProgressCount > 0 && realProgressCount > revealedCount) {
-      setRevealedCount(realProgressCount);
-    }
-
-    intervalRef.current = setInterval(() => {
-      setRevealedCount((prev) => {
-        if (prev >= products.length) {
-          if (intervalRef.current) clearInterval(intervalRef.current);
-          return prev;
-        }
-        return prev + 1;
-      });
-    }, 1500);
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [status, products.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Show all products from the start; status per item comes from progress (added_products = green, else blue loading)
+  const visibleProducts = products;
 
   const headingText =
     status === "shopping"
@@ -267,8 +233,6 @@ export function FillCartProgress({
       : status === "done"
         ? "Shopping complete"
         : "Shopping";
-
-  const visibleProducts = products.slice(0, revealedCount);
 
   return (
     <Card className="card-action fill-cart-progress">
@@ -288,29 +252,24 @@ export function FillCartProgress({
           const key = `${product.name}:${product.quantity}`;
           const isAdded = addedSet.has(key);
           const isFailed = failedSet.has(key);
-          const isLast = index === revealedCount - 1;
 
-          // Determine pixel status for this item
+          // Status from server: added → green (done), failed → red (error), else → blue (loading)
           let pixelStatus: "loading" | "done" | "error";
           if (status === "done" || status === "error") {
             pixelStatus = isFailed ? "error" : "done";
-          } else if (isLast && revealedCount < products.length) {
-            // Currently revealing item — still loading
-            pixelStatus = "loading";
           } else if (isAdded) {
             pixelStatus = "done";
           } else if (isFailed) {
             pixelStatus = "error";
           } else {
-            // Already revealed, not yet confirmed by backend
-            pixelStatus = index < revealedCount - 1 ? "done" : "loading";
+            pixelStatus = "loading";
           }
 
           return (
             <li
               key={key}
               className={`fill-cart-item fill-cart-item-enter${isFailed && status === "done" ? " failed" : ""}`}
-              style={{ animationDelay: `${index * 0.05}s` }}
+              style={{ animationDelay: `${index * 0.03}s` }}
             >
               <PixelLoader status={pixelStatus} />
               <span className="fill-cart-item-text">

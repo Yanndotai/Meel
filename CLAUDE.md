@@ -14,20 +14,19 @@
 
 ## Architecture
 
-### 6-Tool Pattern
+### 5-Tool Pattern
 
-The application follows a **6-tool architecture**:
+The application follows a **5-tool architecture**:
 
 1. **get-profile** (headless tool) - Retrieves user profile and identifies missing fields
 2. **save-preferences** (headless tool) - Saves/updates user preferences
 3. **fill-cart** (headless tool) - Automates filling an online grocery shopping cart using browser automation
-4. **single-card** (widget) - Displays one full-width card (question or info)
-5. **two-cards** (widget) - Displays two cards side-by-side
-6. **show-plan** (widget) - Generates and displays the complete meal plan with shopping list
+4. **four-cards** (widget) - Displays four cards in a 2x2 grid (questions or info); use for all preference collection
+5. **show-plan** (widget) - Generates and displays the complete meal plan with shopping list
 
 ### Key Principle: Card-First UI
 
-**CRITICAL:** All user interactions MUST use interactive cards (`single-card` or `two-cards`). Never ask questions in plain text. The cards automatically send user selections as follow-up messages.
+**CRITICAL:** All user interactions MUST use the **four-cards** widget. Never ask questions in plain text. Always pass exactly 4 cards (use info cards to fill slots if needed). The cards automatically send user selections as follow-up messages.
 
 ## Directory Structure
 
@@ -39,8 +38,7 @@ The application follows a **6-tool architecture**:
 │   └── middleware.ts    # MCP middleware
 ├── web/src/             # React widgets
 │   ├── widgets/         # Widget entry points (must match tool names)
-│   │   ├── single-card.tsx
-│   │   ├── two-cards.tsx
+│   │   ├── four-cards.tsx
 │   │   └── show-plan.tsx
 │   ├── components/      # Shared React components
 │   │   ├── card-renderer.tsx
@@ -65,7 +63,7 @@ The application follows a **6-tool architecture**:
 ```
 User starts → get-profile → Check missing fields
   ↓
-If missing fields → single-card/two-cards (question card)
+If missing fields → four-cards (question cards)
   ↓
 User clicks option → Auto follow-up message sent
   ↓
@@ -307,7 +305,7 @@ await fillCart({
 1. Define Zod schema in [server/src/server.ts:124-136](server/src/server.ts#L124-L136)
 2. Create component in [web/src/components/](web/src/components/)
 3. Add case to [card-renderer.tsx](web/src/components/card-renderer.tsx)
-4. Reference in `single-card` or `two-cards` widgets
+4. Reference in `four-cards` widget
 
 ### Customize Styling
 
@@ -410,7 +408,7 @@ pnpm start  # Runs production server
 ## Troubleshooting
 
 ### Widget not rendering
-- Check filename matches widget name exactly (e.g., `single-card.tsx` for `"single-card"`)
+- Check filename matches widget name exactly (e.g., `four-cards.tsx` for `"four-cards"`)
 - Verify `mountWidget()` is called at bottom of widget file
 - Check browser console in DevTools UI
 

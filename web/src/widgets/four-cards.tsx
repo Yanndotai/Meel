@@ -21,7 +21,9 @@ function FourCards() {
         const summary = Object.entries(answers.current)
           .map(([q, a]) => `${q}: ${a}`)
           .join("\n");
-        sendFollowUp(summary);
+        sendFollowUp(
+          `${summary}\n\n[Preferences confirmed. Generate and display my meal plan by calling the show-plan tool. Do not describe the plan in chat—use the tool.]`,
+        );
       }
     },
     [questionCount, sendFollowUp],
