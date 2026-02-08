@@ -116,6 +116,16 @@ function ShowPlan() {
   const { callToolAsync: callProgressToolAsync } =
     useCallTool("check_fill_cart_progress");
 
+  const [checkedIngredients, setCheckedIngredients] = useState<Set<number>>(new Set());
+  const toggleIngredient = (i: number) => {
+    setCheckedIngredients((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  };
+
   const [fillCartStatus, setFillCartStatus] = useState<
     "idle" | "shopping" | "done" | "error"
   >("idle");
@@ -176,10 +186,12 @@ function ShowPlan() {
   const data = output as ShowPlanOutput;
 
   const handleLooksPerfect = async () => {
-    const products: FillCartProduct[] = data.ingredients.map((i) => ({
-      name: i.name,
-      quantity: `${i.quantity} ${i.unit}`,
-    }));
+    const products: FillCartProduct[] = data.ingredients
+      .filter((_, i) => !checkedIngredients.has(i))
+      .map((i) => ({
+        name: i.name,
+        quantity: `${i.quantity} ${i.unit}`,
+      }));
 
     setFillCartProducts(products);
     setFillCartStatus("shopping");
@@ -265,7 +277,11 @@ function ShowPlan() {
   return (
     <div className="layout-trio">
       <MealPlanCard meal_plan={data.meal_plan} imageBaseUrl={imageBaseUrl} />
-      <IngredientsCard ingredients={data.ingredients} />
+      <IngredientsCard
+        ingredients={data.ingredients}
+        checkedIndices={checkedIngredients}
+        onToggle={toggleIngredient}
+      />
       {fillCartStatus === "idle" ? (
         <ActionCard
           sendFollowUp={sendFollowUp}

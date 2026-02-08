@@ -152,31 +152,43 @@ export function MealPlanCard({
 
 export function IngredientsCard({
   ingredients,
+  checkedIndices,
+  onToggle,
 }: {
   ingredients: Ingredient[];
+  checkedIndices?: Set<number>;
+  onToggle?: (index: number) => void;
 }) {
-  const [checked, setChecked] = useState<Set<number>>(new Set());
+  const [localChecked, setLocalChecked] = useState<Set<number>>(new Set());
 
+  const checked = checkedIndices ?? localChecked;
   const toggle = (i: number) => {
-    setChecked((prev) => {
-      const next = new Set(prev);
-      if (next.has(i)) next.delete(i);
-      else next.add(i);
-      return next;
-    });
+    if (onToggle) {
+      onToggle(i);
+    } else {
+      setLocalChecked((prev) => {
+        const next = new Set(prev);
+        if (next.has(i)) next.delete(i);
+        else next.add(i);
+        return next;
+      });
+    }
   };
 
-  const totalPrice = ingredients.reduce(
+  const unchecked = ingredients.filter((_, i) => !checked.has(i));
+  const totalPrice = unchecked.reduce(
     (sum, ing) => sum + (ing.estimated_price ?? 0),
     0,
   );
+  const itemsLeft = unchecked.length;
 
   return (
     <Card>
       <CardHeader
         title="Shopping List"
-        detail={totalPrice > 0 ? `~${totalPrice.toFixed(2)}€` : `${ingredients.length - checked.size} left`}
+        detail={totalPrice > 0 ? `${itemsLeft} items · ~${totalPrice.toFixed(2)}€` : `${itemsLeft} items`}
       />
+      <p className="ingredient-hint">Check what you already have</p>
       <div className="ingredients-list">
         {ingredients.map((ing, i) => (
           <div
