@@ -2,6 +2,8 @@
 
 **Meel** is an intuitive meal-and-grocery assistant for busy people who care about health. It runs inside ChatGPT—no new app. Agentic AI learns your diet and budget, builds a visual weekly plan with recipe images and a priced list, then fills your cart at the store. You press buy.
 
+**[▶ Watch demo](https://streamable.com/t4neyf)**
+
 ---
 
 ## The problem we solve
