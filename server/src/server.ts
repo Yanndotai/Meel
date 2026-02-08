@@ -119,8 +119,8 @@ async function fillShoppingCart(
   const shop = {
     name: "Carrefour",
     profileId: "20569cab-609c-43b5-9d1f-141322e6b7bd",
-    startUrl: "https://www.carrefour.fr"
-  }
+    startUrl: "https://www.carrefour.fr",
+  };
 
   try {
     const session = await client.sessions.createSession({
@@ -131,7 +131,6 @@ async function fillShoppingCart(
 
     let addedProducts: Array<{ name: string; quantity: string }> = [];
     let failedProducts: Array<{ name: string; quantity: string }> = [];
-    let lastTaskResult: Awaited<ReturnType<typeof initialTask.complete>> | null = null;
 
     const initialTaskDesc = `
     If you are asked to choose a new address or resume shopping, choose option called "Choisir un autre Drive ou une autre adresse de livraison", 
@@ -173,7 +172,6 @@ async function fillShoppingCart(
 
         // Get final result
         const result = await task.complete();
-        lastTaskResult = result;
         console.log(`[${product.name}] Task completed:`, result.status);
 
         addedProducts.push({ ...product });
@@ -193,17 +191,30 @@ async function fillShoppingCart(
       }
     }
 
-    const lastUrl =
-      lastTaskResult?.steps?.length &&
-      lastTaskResult.steps[lastTaskResult.steps.length - 1]?.url
-        ? lastTaskResult.steps[lastTaskResult.steps.length - 1].url
-        : "https://www.carrefour.fr/mon-panier";
+    // Final step: go to "my cart" so we can capture the session-specific cart URL
+    let cartUrl: string | null = null;
+    try {
+      const goToCartTask = await client.tasks.createTask({
+        task: "Navigate to my cart. Open the shopping cart / panier page and stay on it. Do not add or remove items. Just go to the cart.",
+        sessionId: session.id,
+        maxSteps: 5,
+        llm: "browser-use-2.0",
+      });
+      const cartResult = await goToCartTask.complete();
+      const steps = cartResult?.steps;
+      if (steps?.length && steps[steps.length - 1]?.url) {
+        cartUrl = steps[steps.length - 1].url;
+        console.log("[fill-cart] Cart URL captured:", cartUrl);
+      }
+    } catch (e) {
+      console.error("[fill-cart] Failed to navigate to cart:", e);
+    }
 
     onProgress?.({
       status: "completed",
       added_products: addedProducts,
       failed_products: failedProducts,
-      cart_url: lastUrl,
+      cart_url: cartUrl,
       current_product: null,
     });
 
@@ -211,7 +222,7 @@ async function fillShoppingCart(
       success: true,
       added_products: addedProducts,
       failed_products: failedProducts,
-      cart_url: lastUrl,
+      cart_url: cartUrl,
     };
   } catch (error: any) {
     onProgress?.({
@@ -346,12 +357,12 @@ const server = new McpServer(
       };
     },
   )
-  // ── check_fill_cart_progress (private tool: widget-only; server long-polls) ──
+  // ── check_fill_cart_progress (widget-only: manual "Update" button) ──
   .registerTool(
     "check_fill_cart_progress",
     {
       description:
-        "Check progress of a fill-cart job. Used by the app/widget only to poll for live updates.",
+        "Check progress of a fill-cart job. Used by the show-plan widget when the user clicks Update to refresh cart status.",
       inputSchema: {
         jobId: z.string().describe("Fill-cart job ID returned when the job was started"),
       },
@@ -371,18 +382,6 @@ const server = new McpServer(
         progressFound: !!progress,
         status: progress?.status ?? null,
       });
-      fetch("http://127.0.0.1:7247/ingest/47f13895-01ff-45bb-8d2b-39b520b23527", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          location: "server.ts:check_fill_cart_progress:entry",
-          message: "check_fill_cart_progress invoked",
-          data: { jobId, progressFound: !!progress, status: progress?.status },
-          timestamp: Date.now(),
-          hypothesisId: "H2_H5",
-        }),
-      }).catch(() => {});
-      // #endregion
 
       if (!progress) {
         const payload = {

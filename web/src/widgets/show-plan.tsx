@@ -1,6 +1,6 @@
 import "@/index.css";
 
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { mountWidget } from "skybridge/web";
 import { useToolInfo, useSendFollowUpMessage, useCallTool } from "../helpers";
 import {
@@ -19,8 +19,6 @@ interface ShowPlanOutput {
   ingredients: Ingredient[];
   message: string;
 }
-
-const POLL_INITIAL_DELAY_MS = 2_000;
 
 interface ProgressPayload {
   status:
@@ -55,13 +53,22 @@ function extractProgressFromToolResult(result: unknown): ProgressPayload | null 
     };
   };
 
+  // Try top-level result as payload (host may forward tool output at root)
+  const atRoot = fromPayload(r);
+  if (atRoot) return atRoot;
+
   if (r.structuredContent != null) {
     const parsed = fromPayload(r.structuredContent);
     if (parsed) return parsed;
   }
   const content0 = Array.isArray(r.content) ? r.content[0] : undefined;
-  if (content0 != null && typeof content0 === "object" && "structuredContent" in content0) {
-    const parsed = fromPayload((content0 as { structuredContent: unknown }).structuredContent);
+  if (content0 != null && typeof content0 === "object") {
+    if ("structuredContent" in content0) {
+      const parsed = fromPayload((content0 as { structuredContent: unknown }).structuredContent);
+      if (parsed) return parsed;
+    }
+    // content[0] itself might be the payload
+    const parsed = fromPayload(content0);
     if (parsed) return parsed;
   }
   if (r.result != null) {
@@ -83,6 +90,17 @@ function extractProgressFromToolResult(result: unknown): ProgressPayload | null 
         if (parsed) return parsed;
       } catch {
         continue;
+      }
+    }
+    // Try to find a JSON object anywhere in the text (e.g. embedded in markdown or prose)
+    const objectMatch = text.match(/\{[\s\S]*?"status"[\s\S]*?"added_products"[\s\S]*?\}/);
+    if (objectMatch) {
+      try {
+        const json = JSON.parse(objectMatch[0]) as unknown;
+        const parsed = fromPayload(json);
+        if (parsed) return parsed;
+      } catch {
+        // ignore
       }
     }
   }
@@ -111,147 +129,45 @@ function ShowPlan() {
   const [fillCartErrorMessage, setFillCartErrorMessage] = useState<
     string | null
   >(null);
-  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
-    };
-  }, []);
+  const handleUpdateProgress = async () => {
+    if (fillCartJobId == null) return;
+    try {
+      const result = await callProgressToolAsync({ jobId: fillCartJobId });
+      const data = extractProgressFromToolResult(result);
+      if (!data || data.status === "not_found") return;
 
-  useEffect(() => {
-    if (fillCartJobId == null || fillCartStatus !== "shopping") return;
+      setFillCartProgress({
+        added_products: data.added_products ?? [],
+        failed_products: data.failed_products ?? [],
+      });
 
-    // #region agent log
-    fetch("http://127.0.0.1:7247/ingest/47f13895-01ff-45bb-8d2b-39b520b23527", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "show-plan.tsx:poll-effect:run",
-        message: "polling effect running (single-call + retry)",
-        data: { fillCartJobId, fillCartStatus },
-        timestamp: Date.now(),
-        hypothesisId: "H3",
-      }),
-    }).catch(() => {});
-    // #endregion
-
-    let cancelled = false;
-
-    const pollOnce = async () => {
-      try {
-        // #region agent log
-        fetch("http://127.0.0.1:7247/ingest/47f13895-01ff-45bb-8d2b-39b520b23527", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "show-plan.tsx:poll:call",
-            message: "calling check_fill_cart_progress (server long-polls)",
-            data: { jobId: fillCartJobId },
-            timestamp: Date.now(),
-            hypothesisId: "H2_H3",
-          }),
-        }).catch(() => {});
-        // #endregion
-        const result = await callProgressToolAsync({ jobId: fillCartJobId });
-        if (cancelled) return;
-
-        const data = extractProgressFromToolResult(result);
-
-        // #region agent log
-        fetch("http://127.0.0.1:7247/ingest/47f13895-01ff-45bb-8d2b-39b520b23527", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "show-plan.tsx:poll:result",
-            message: "check_fill_cart_progress result",
-            data: {
-              hasData: !!data,
-              status: data?.status ?? null,
-              resultKeys: result != null && typeof result === "object" ? Object.keys(result as object) : [],
-            },
-            timestamp: Date.now(),
-            hypothesisId: "H4_H5",
-          }),
-        }).catch(() => {});
-        // #endregion
-
-        if (!data || data.status === "not_found") {
-          pollTimeoutRef.current = setTimeout(pollOnce, 1000);
-          return;
-        }
-
-        setFillCartProgress({
+      if (data.status === "completed" || data.status === "failed") {
+        setFillCartResult({
           added_products: data.added_products ?? [],
           failed_products: data.failed_products ?? [],
+          cart_url: data.cart_url ?? undefined,
         });
-
-        if (data.status === "completed" || data.status === "failed") {
-          setFillCartResult({
-            added_products: data.added_products ?? [],
-            failed_products: data.failed_products ?? [],
-            cart_url: data.cart_url ?? undefined,
-          });
-          setFillCartStatus("done");
-          setFillCartJobId(null);
-          const added = (data.added_products ?? []).length;
-          const failed = (data.failed_products ?? []).length;
-          if (data.status === "failed" && data.error) {
-            sendFollowUp(`Cart fill failed: ${data.error}`);
-          } else if (failed > 0) {
-            sendFollowUp(
-              `Cart ready with ${added} item${added === 1 ? "" : "s"} added. ${failed} item${failed === 1 ? "" : "s"} could not be added.`,
-            );
-          } else {
-            sendFollowUp(
-              `Cart ready with ${added} item${added === 1 ? "" : "s"} added.`,
-            );
-          }
-          return;
+        setFillCartStatus("done");
+        setFillCartJobId(null);
+        const added = (data.added_products ?? []).length;
+        const failed = (data.failed_products ?? []).length;
+        if (data.status === "failed" && data.error) {
+          sendFollowUp(`Cart fill failed: ${data.error}`);
+        } else if (failed > 0) {
+          sendFollowUp(
+            `Cart ready with ${added} item${added === 1 ? "" : "s"} added. ${failed} item${failed === 1 ? "" : "s"} could not be added.`,
+          );
+        } else {
+          sendFollowUp(
+            `Cart ready with ${added} item${added === 1 ? "" : "s"} added.`,
+          );
         }
-
-        // Still started/running (server returned after 50s timeout): call once more
-        pollTimeoutRef.current = setTimeout(pollOnce, 1000);
-      } catch (err) {
-        // #region agent log
-        fetch("http://127.0.0.1:7247/ingest/47f13895-01ff-45bb-8d2b-39b520b23527", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "show-plan.tsx:poll:catch",
-            message: "callProgressToolAsync threw",
-            data: {
-              errMessage: err instanceof Error ? err.message : String(err),
-              cancelled,
-            },
-            timestamp: Date.now(),
-            hypothesisId: "H2",
-          }),
-        }).catch(() => {});
-        // #endregion
-        if (cancelled) return;
-        pollTimeoutRef.current = setTimeout(pollOnce, 1000);
       }
-    };
-
-    const initialTimeoutId = setTimeout(() => {
-      if (!cancelled) pollOnce();
-    }, POLL_INITIAL_DELAY_MS);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(initialTimeoutId);
-      if (pollTimeoutRef.current) {
-        clearTimeout(pollTimeoutRef.current);
-        pollTimeoutRef.current = null;
-      }
-    };
-  }, [
-    fillCartJobId,
-    fillCartStatus,
-    sendFollowUp,
-    callProgressToolAsync,
-  ]);
+    } catch (err) {
+      console.error("[fill-cart] Update progress failed:", err);
+    }
+  };
 
   if (!isSuccess || !output) return null;
 
@@ -272,31 +188,6 @@ function ShowPlan() {
 
     try {
       const result = await callToolAsync({ products });
-
-      // #region agent log
-      const resultPayloadForLog = result as Record<string, unknown> & {
-        structuredContent?: unknown;
-        _meta?: { taskId?: string };
-      };
-      const jobIdFromMeta = resultPayloadForLog?._meta?.taskId;
-      const jobIdFromStructured = (resultPayloadForLog?.structuredContent as { jobId?: string } | undefined)?.jobId;
-      fetch("http://127.0.0.1:7247/ingest/47f13895-01ff-45bb-8d2b-39b520b23527", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          location: "show-plan.tsx:handleLooksPerfect:after fill-cart",
-          message: "fill-cart result received",
-          data: {
-            resultKeys: result != null && typeof result === "object" ? Object.keys(result as object) : [],
-            hasMeta: !!resultPayloadForLog?._meta,
-            jobIdFromMeta: jobIdFromMeta ?? null,
-            jobIdFromStructured: jobIdFromStructured ?? null,
-          },
-          timestamp: Date.now(),
-          hypothesisId: "H1",
-        }),
-      }).catch(() => {});
-      // #endregion
 
       const resultPayload = result as Record<string, unknown> & {
         content?: Array<{ type?: string; text?: string; structuredContent?: unknown }>;
@@ -385,6 +276,11 @@ function ShowPlan() {
           errorMessage={fillCartErrorMessage}
           onTryAgain={
             fillCartStatus === "error" ? handleFillCartTryAgain : undefined
+          }
+          onUpdate={
+            fillCartStatus === "shopping" && fillCartJobId != null
+              ? handleUpdateProgress
+              : undefined
           }
         />
       )}

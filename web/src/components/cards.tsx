@@ -187,6 +187,7 @@ export function FillCartProgress({
   result,
   errorMessage,
   onTryAgain,
+  onUpdate,
 }: {
   status: "shopping" | "done" | "error";
   products: FillCartProduct[];
@@ -194,6 +195,7 @@ export function FillCartProgress({
   result?: FillCartResult | null;
   errorMessage?: string | null;
   onTryAgain?: () => void;
+  onUpdate?: () => void | Promise<void>;
 }) {
   const addedSource = status === "done" ? result : progress;
   const failedSource = status === "done" ? result : progress;
@@ -242,6 +244,15 @@ export function FillCartProgress({
           );
         })}
       </ul>
+      {status === "shopping" && onUpdate && (
+        <button
+          type="button"
+          className="btn btn-primary fill-cart-update-btn"
+          onClick={onUpdate}
+        >
+          Update
+        </button>
+      )}
       {status === "done" && result?.cart_url && (
         <a
           href={result.cart_url}
