@@ -260,7 +260,7 @@ const CardConfigSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-// --- Fal AI (recipe images: nano-banana text-to-image) ---
+// --- Fal AI (recipe images: flux 1.1 pro ultra text-to-image) ---
 const FAL_IMAGE_HOST_ALLOWLIST = [
   "fal.media",
   "fal.ai",
@@ -306,9 +306,10 @@ async function generateRecipeImage(recipeName: string): Promise<string | null> {
   }
   console.log("[show-plan] Generating image for recipe:", recipeName);
   try {
-    const result = await fal.subscribe("fal-ai/nano-banana", {
+    const result = await fal.subscribe("fal-ai/flux-pro/v1.1-ultra", {
       input: {
         prompt: `Appetizing food photography of ${recipeName}, professional dish presentation, high quality`,
+        aspect_ratio: "1:1",
       },
     });
     const url = (result.data as { images?: Array<{ url?: string }> })?.images?.[0]?.url;
